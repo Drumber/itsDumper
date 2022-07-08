@@ -3,6 +3,7 @@ const path = require('path')
 const dotenv = require('dotenv')
 const fetch = require('node-fetch')
 const DomParser = require('dom-parser');
+const { decode } = require("html-entities")
 
 //===========[ Configuration ]===========
 const SCHOOL_ID = "" // can be configured using environment variable 'SCHOOL'
@@ -89,7 +90,7 @@ async function getCourses(school, sessionId) {
 }
 
 async function downloadResourcesOfCourses(school, sessionId, courses) {
-    await courses.map(async (course) => {
+    for (const course of courses) {
         const contentUrl = `https://${school}.itslearning.com/ContentArea/ContentArea.aspx?LocationID=${course.CourseId}&LocationType=1`
 
         const contentResponse = await fetch(contentUrl, {
@@ -111,18 +112,20 @@ async function downloadResourcesOfCourses(school, sessionId, courses) {
         const resourcesAnchor = dom.getElementById("link-resources")
         const resourceFolderUrl = resourcesAnchor.getAttribute("href")
 
-        const parentFolder = path.join(downloadLocation, course.Title.replace(/[&\/\\#,+()$~%.'":*?<>{}]/g, '_'))
+        const parentFolder = path.join(downloadLocation, decodeString(course.Title))
         await downloadResourceFolder(school, resourceFolderUrl, sessionId, parentFolder)
-    })
+    }
 }
 
 /**
  * Downloads all files in the given folder recursively.
  * @param {String} folderUrl url refering to the target folder
  * @param {String} sessionId session ID for <school>.itslearning.com
- * @param {Strubg} parentFolderPath the relative path of the parent folder
+ * @param {String} parentFolderPath the relative path of the parent folder
+ * @param {Boolean} appendId set to true to append the folder ID to the name
+ *                           if there are multiple folders with the same name
  */
-async function downloadResourceFolder(school, folderUrl, sessionId, parentFolderPath) {
+async function downloadResourceFolder(school, folderUrl, sessionId, parentFolderPath, appendId) {
     if (folderUrl.startsWith("/")) {
         folderUrl = `https://${school}.itslearning.com${folderUrl}`
     }
@@ -143,25 +146,36 @@ async function downloadResourceFolder(school, folderUrl, sessionId, parentFolder
     const parser = new DomParser()
     const dom = parser.parseFromString(webContent)
 
+    // extract current folder name
+    const rawFolderName = dom.getElementById("ctl00_PageHeader_TT").textContent
+    let folderName = decodeString(rawFolderName)
+    if (appendId) {
+        // since multiple folders can have the same name, we append the folder ID
+        const folderId = folderUrl.match(/FolderID=(\d+)/)[1]
+        folderName = `${folderName} [${folderId}]`
+    }
+    const folderPath = `${parentFolderPath}/${folderName}`
+
     const folderEntries = dom.getElementsByClassName("GridTitle")
-    folderEntries.forEach(async (entry) => {
+    const folderEntryNames = folderEntries.map(e => e.textContent)
+
+    for (const entry of folderEntries) {
         const url = entry.getAttribute("href")
 
-        // extract current folder name
-        const folderName = dom.getElementById("ctl00_PageHeader_TT").textContent.replace(/[&\/\\#,+()$~%.'":*?<>{}]/g, '_')
-        const folderPath = `${parentFolderPath}/${folderName}`
+        const numberOfSameName = folderEntryNames.filter(n => n === entry.textContent).length
+        const shouldAppendId = numberOfSameName > 1 ? true : false
 
         if (url.startsWith("/Folder")) {
             // go to nested folder
-            await downloadResourceFolder(school, url, sessionId, folderPath)
+            await downloadResourceFolder(school, url, sessionId, folderPath, shouldAppendId)
         } else if (url.startsWith("/LearningToolElement")) {
-            // download file
+            // extract element id and download file
             const elementId = url.match(/LearningToolElementId=(\d+)/)[1]
             downloadResourceObject(school, sessionId, elementId, folderPath)
         } else {
             console.warn("Unknown folder entry type. Url: " + url)
         }
-    })
+    }
 }
 
 /**
@@ -327,6 +341,15 @@ function convertSetCookieToCookieString(cookieArray) {
     const cookies = cookieArray.map(cookie => cookie.substring(0, cookie.indexOf(";")))
     const uniqueCookies = [...new Set(cookies)]
     return uniqueCookies.join('; ')
+}
+
+/**
+ * Decode text as UTF-8 and replace special characters that are not
+ * allowed in file names.
+ */
+function decodeString(text) {
+    const decoded = decode(Buffer.from(text, 'utf-8').toString())
+    return decoded.replace(/[\/\\|":?*<>{}]/g, '_')
 }
 
 main()

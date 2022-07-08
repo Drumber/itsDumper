@@ -9,6 +9,7 @@ const { decode } = require("html-entities")
 const SCHOOL_ID = "" // can be configured using environment variable 'SCHOOL'
 
 const downloadLocation = "./data"
+const skipAlreadyDownloadedFiles = true // skip files, if they already exists
 //=======================================
 
 async function main() {
@@ -310,6 +311,13 @@ function getOfficeFileDownloadUrl(webContent) {
  * @param {String} filename the target file name
  */
 async function downloadFile(downloadUrl, cookieString, folderPath, filename) {
+    const downloadLocation = path.join(folderPath, filename)
+
+    if (fs.existsSync(downloadLocation) && skipAlreadyDownloadedFiles) {
+        console.log("Skipping file: " + downloadLocation)
+        return
+    }
+
     const response = await fetch(downloadUrl, {
         headers: {
             'Cookie': cookieString
@@ -325,7 +333,6 @@ async function downloadFile(downloadUrl, cookieString, folderPath, filename) {
         fs.mkdirSync(folderPath, { recursive: true })
     }
 
-    const downloadLocation = path.join(folderPath, filename)
     const fileStream = fs.createWriteStream(downloadLocation)
 
     await new Promise((resolve, reject) => {
